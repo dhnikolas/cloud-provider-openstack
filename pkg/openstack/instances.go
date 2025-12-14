@@ -46,8 +46,8 @@ const (
 
 // InstancesV2 encapsulates an implementation of InstancesV2 for OpenStack.
 type InstancesV2 struct {
-	compute          *gophercloud.ServiceClient
-	network          *gophercloud.ServiceClient
+	compute          *clientsFactory
+	network          *clientsFactory
 	region           string
 	regionProviderID bool
 	networkingOpts   NetworkingOpts
@@ -69,14 +69,17 @@ func (os *OpenStack) InstancesV2() (cloudprovider.InstancesV2, bool) {
 		return nil, false
 	}
 
+	computeFactory := newClientsFactory(computeClientType, compute)
+	networkFactory := newClientsFactory(networkClientType, network)
+
 	regionalProviderID := false
 	if isRegionalProviderID := sysos.Getenv(RegionalProviderIDEnv); isRegionalProviderID == "true" {
 		regionalProviderID = true
 	}
 
 	return &InstancesV2{
-		compute:          compute,
-		network:          network,
+		compute:          computeFactory,
+		network:          networkFactory,
 		region:           os.epOpts.Region,
 		regionProviderID: regionalProviderID,
 		networkingOpts:   os.networkingOpts,
@@ -124,17 +127,17 @@ func (i *InstancesV2) InstanceMetadata(ctx context.Context, node *v1.Node) (*clo
 		server = *srv
 	}
 
-	instanceType, err := srvInstanceType(ctx, i.compute, &server)
+	instanceType, err := srvInstanceType(ctx, i.compute.get(node.ObjectMeta), &server)
 	if err != nil {
 		return nil, err
 	}
 
-	ports, err := getAttachedPorts(ctx, i.network, server.ID)
+	ports, err := getAttachedPorts(ctx, i.network.get(node.ObjectMeta), server.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	addresses, err := nodeAddresses(ctx, &server, ports, i.network, i.networkingOpts)
+	addresses, err := nodeAddresses(ctx, &server, ports, i.network.get(node.ObjectMeta), i.networkingOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +162,7 @@ func (i *InstancesV2) makeInstanceID(srv *servers.Server) string {
 
 func (i *InstancesV2) getInstance(ctx context.Context, node *v1.Node) (*servers.Server, error) {
 	if node.Spec.ProviderID == "" {
-		return getServerByName(ctx, i.compute, node.Name)
+		return getServerByName(ctx, i.compute.get(node.ObjectMeta), node.Name)
 	}
 
 	instanceID, instanceRegion, err := instanceIDFromProviderID(node.Spec.ProviderID)
@@ -172,7 +175,7 @@ func (i *InstancesV2) getInstance(ctx context.Context, node *v1.Node) (*servers.
 	}
 
 	mc := metrics.NewMetricContext("server", "get")
-	server, err := servers.Get(ctx, i.compute, instanceID).Extract()
+	server, err := servers.Get(ctx, i.compute.get(node.ObjectMeta), instanceID).Extract()
 	if mc.ObserveRequest(err) != nil {
 		if errors.IsNotFound(err) {
 			return nil, cloudprovider.InstanceNotFound

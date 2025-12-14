@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	openstackutil "k8s.io/cloud-provider-openstack/pkg/util/openstack"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -39,7 +40,7 @@ import (
 
 // Routes implements the cloudprovider.Routes for OpenStack clouds
 type Routes struct {
-	network *gophercloud.ServiceClient
+	network *clientsFactory
 	os      *OpenStack
 	// router's private network IDs
 	networkIDs []string
@@ -55,7 +56,7 @@ type Routes struct {
 var _ cloudprovider.Routes = &Routes{}
 
 // NewRoutes creates a new instance of Routes
-func NewRoutes(os *OpenStack, network *gophercloud.ServiceClient, atomicRoutes bool, allowedAddressPairs bool) (cloudprovider.Routes, error) {
+func NewRoutes(os *OpenStack, network *clientsFactory, atomicRoutes bool, allowedAddressPairs bool) (cloudprovider.Routes, error) {
 	if os.routeOpts.RouterID == "" {
 		return nil, errors.ErrNoRouterID
 	}
@@ -82,7 +83,7 @@ func (r *Routes) ListRoutes(ctx context.Context, clusterName string) ([]*cloudpr
 	}
 
 	mc := metrics.NewMetricContext("router", "get")
-	router, err := routers.Get(ctx, r.network, r.os.routeOpts.RouterID).Extract()
+	router, err := routers.Get(ctx, r.network.get(metav1.ObjectMeta{}), r.os.routeOpts.RouterID).Extract()
 	if mc.ObserveRequest(err) != nil {
 		return nil, err
 	}
@@ -100,7 +101,7 @@ func (r *Routes) ListRoutes(ctx context.Context, clusterName string) ([]*cloudpr
 	}
 
 	// detect router's private network ID for further VM ports filtering
-	r.networkIDs, err = getRouterNetworkIDs(ctx, r.network, r.os.routeOpts.RouterID)
+	r.networkIDs, err = getRouterNetworkIDs(ctx, r.network.get(metav1.ObjectMeta{}), r.os.routeOpts.RouterID)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +296,7 @@ func (r *Routes) CreateRoute(ctx context.Context, clusterName string, nameHint s
 		defer r.Unlock()
 
 		mc := metrics.NewMetricContext("router", "get")
-		router, err := routers.Get(ctx, r.network, r.os.routeOpts.RouterID).Extract()
+		router, err := routers.Get(ctx, r.network.get(metav1.ObjectMeta{}), r.os.routeOpts.RouterID).Extract()
 		if mc.ObserveRequest(err) != nil {
 			return err
 		}
@@ -314,7 +315,7 @@ func (r *Routes) CreateRoute(ctx context.Context, clusterName string, nameHint s
 			NextHop:         addr,
 		})
 
-		unwind, err := updateRoutes(ctx, r.network, router, routes)
+		unwind, err := updateRoutes(ctx, r.network.get(metav1.ObjectMeta{}), router, routes)
 		if err != nil {
 			return err
 		}
@@ -326,7 +327,7 @@ func (r *Routes) CreateRoute(ctx context.Context, clusterName string, nameHint s
 			DestinationCIDR: route.DestinationCIDR,
 			NextHop:         addr,
 		}}
-		unwind, err := addRoute(ctx, r.network, r.os.routeOpts.RouterID, route)
+		unwind, err := addRoute(ctx, r.network.get(metav1.ObjectMeta{}), r.os.routeOpts.RouterID, route)
 		if err != nil {
 			return err
 		}
@@ -364,7 +365,7 @@ func (r *Routes) CreateRoute(ctx context.Context, clusterName string, nameHint s
 		newPairs := append(port.AllowedAddressPairs, ports.AddressPair{
 			IPAddress: route.DestinationCIDR,
 		})
-		unwind, err := updateAllowedAddressPairs(ctx, r.network, port, newPairs)
+		unwind, err := updateAllowedAddressPairs(ctx, r.network.get(metav1.ObjectMeta{}), port, newPairs)
 		if err != nil {
 			return err
 		}
@@ -404,7 +405,7 @@ func (r *Routes) DeleteRoute(ctx context.Context, clusterName string, route *clo
 		defer r.Unlock()
 
 		mc := metrics.NewMetricContext("router", "get")
-		router, err := routers.Get(ctx, r.network, r.os.routeOpts.RouterID).Extract()
+		router, err := routers.Get(ctx, r.network.get(metav1.ObjectMeta{}), r.os.routeOpts.RouterID).Extract()
 		if mc.ObserveRequest(err) != nil {
 			return err
 		}
@@ -427,7 +428,7 @@ func (r *Routes) DeleteRoute(ctx context.Context, clusterName string, route *clo
 		routes[index] = routes[len(routes)-1]
 		routes = routes[:len(routes)-1]
 
-		unwind, err := updateRoutes(ctx, r.network, router, routes)
+		unwind, err := updateRoutes(ctx, r.network.get(metav1.ObjectMeta{}), router, routes)
 		// If this was a blackhole route we are done, there are no ports to update
 		if err != nil || route.Blackhole {
 			return err
@@ -444,7 +445,7 @@ func (r *Routes) DeleteRoute(ctx context.Context, clusterName string, route *clo
 			DestinationCIDR: route.DestinationCIDR,
 			NextHop:         addr,
 		}}
-		unwind, err := removeRoute(ctx, r.network, r.os.routeOpts.RouterID, route)
+		unwind, err := removeRoute(ctx, r.network.get(metav1.ObjectMeta{}), r.os.routeOpts.RouterID, route)
 		// If this was a blackhole route we are done, there are no ports to update
 		if err != nil || blackhole {
 			return err
@@ -484,7 +485,7 @@ func (r *Routes) DeleteRoute(ctx context.Context, clusterName string, route *clo
 		addrPairs[index] = addrPairs[len(addrPairs)-1]
 		addrPairs = addrPairs[:len(addrPairs)-1]
 
-		unwind, err := updateAllowedAddressPairs(ctx, r.network, port, addrPairs)
+		unwind, err := updateAllowedAddressPairs(ctx, r.network.get(metav1.ObjectMeta{}), port, addrPairs)
 		if err != nil {
 			return err
 		}
@@ -506,7 +507,7 @@ func (r *Routes) getPortByIP(ctx context.Context, addr string) (*PortWithPortSec
 			},
 			NetworkID: networkID,
 		}
-		ports, err := openstackutil.GetPorts[PortWithPortSecurity](ctx, r.network, opts)
+		ports, err := openstackutil.GetPorts[PortWithPortSecurity](ctx, r.network.get(metav1.ObjectMeta{}), opts)
 		if err != nil {
 			return nil, err
 		}

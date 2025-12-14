@@ -145,9 +145,9 @@ func disassociateSecurityGroupForLB(ctx context.Context, network *gophercloud.Se
 }
 
 // group, if it not present.
-func (lbaas *LbaasV2) ensureSecurityRule(ctx context.Context, sgRuleCreateOpts rules.CreateOpts) error {
+func (lbaas *LbaasV2) ensureSecurityRule(ctx context.Context, apiService *corev1.Service, sgRuleCreateOpts rules.CreateOpts) error {
 	mc := metrics.NewMetricContext("security_group_rule", "create")
-	_, err := rules.Create(ctx, lbaas.network, sgRuleCreateOpts).Extract()
+	_, err := rules.Create(ctx, lbaas.network.get(apiService.ObjectMeta), sgRuleCreateOpts).Extract()
 	if err != nil && cpoerrors.IsConflictError(err) {
 		// Conflict means the SG rule already exists, so ignoring that error.
 		klog.Warningf("Security group rule already found when trying to create it. This indicates concurrent "+
@@ -213,7 +213,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 
 	// ensure security group for LB
 	lbSecGroupName := getSecurityGroupName(apiService)
-	lbSecGroupID, err := secgroups.IDFromName(ctx, lbaas.network, lbSecGroupName)
+	lbSecGroupID, err := secgroups.IDFromName(ctx, lbaas.network.get(apiService.ObjectMeta), lbSecGroupName)
 	if err != nil {
 		// If the security group of LB not exist, create it later
 		if cpoerrors.IsNotFound(err) {
@@ -230,7 +230,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 		}
 
 		mc := metrics.NewMetricContext("security_group", "create")
-		lbSecGroup, err := groups.Create(ctx, lbaas.network, lbSecGroupCreateOpts).Extract()
+		lbSecGroup, err := groups.Create(ctx, lbaas.network.get(apiService.ObjectMeta), lbSecGroupCreateOpts).Extract()
 		if mc.ObserveRequest(err) != nil {
 			return fmt.Errorf("failed to create Security Group for loadbalancer service %s/%s: %v", apiService.Namespace, apiService.Name, err)
 		}
@@ -238,7 +238,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 	}
 
 	mc := metrics.NewMetricContext("subnet", "get")
-	subnet, err := subnets.Get(ctx, lbaas.network, svcConf.lbMemberSubnetID).Extract()
+	subnet, err := subnets.Get(ctx, lbaas.network.get(apiService.ObjectMeta), svcConf.lbMemberSubnetID).Extract()
 	if mc.ObserveRequest(err) != nil {
 		return fmt.Errorf(
 			"failed to find subnet %s from openstack: %v", svcConf.lbMemberSubnetID, err)
@@ -256,7 +256,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 		cidrs = svcConf.allowedCIDR
 	}
 
-	existingRules, err := openstackutil.GetSecurityGroupRules(ctx, lbaas.network, rules.ListOpts{SecGroupID: lbSecGroupID})
+	existingRules, err := openstackutil.GetSecurityGroupRules(ctx, lbaas.network.get(apiService.ObjectMeta), rules.ListOpts{SecGroupID: lbSecGroupID})
 	if err != nil {
 		return fmt.Errorf(
 			"failed to find security group rules in %s: %v", lbSecGroupID, err)
@@ -306,7 +306,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 
 	// create new rules
 	for _, opts := range toCreate {
-		err := lbaas.ensureSecurityRule(ctx, opts)
+		err := lbaas.ensureSecurityRule(ctx, apiService, opts)
 		if err != nil {
 			return fmt.Errorf("failed to apply security rule (%v), %w", opts, err)
 		}
@@ -316,7 +316,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 	for _, existingRule := range toDelete {
 		klog.Infof("Deleting rule %s from security group %s (%s)", existingRule.ID, existingRule.SecGroupID, lbSecGroupName)
 		mc := metrics.NewMetricContext("security_group_rule", "delete")
-		err := rules.Delete(ctx, lbaas.network, existingRule.ID).ExtractErr()
+		err := rules.Delete(ctx, lbaas.network.get(apiService.ObjectMeta), existingRule.ID).ExtractErr()
 		if err != nil && cpoerrors.IsNotFound(err) {
 			// ignore 404
 			klog.Warningf("Security group rule %s found missing when trying to delete it. This indicates concurrent "+
@@ -327,7 +327,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 		}
 	}
 
-	if err := applyNodeSecurityGroupIDForLB(ctx, lbaas.network, svcConf, nodes, lbSecGroupID); err != nil {
+	if err := applyNodeSecurityGroupIDForLB(ctx, lbaas.network.get(apiService.ObjectMeta), svcConf, nodes, lbSecGroupID); err != nil {
 		return err
 	}
 	return nil
@@ -337,7 +337,7 @@ func (lbaas *LbaasV2) ensureAndUpdateOctaviaSecurityGroup(ctx context.Context, c
 func (lbaas *LbaasV2) ensureSecurityGroupDeleted(ctx context.Context, service *corev1.Service) error {
 	// Generate Name
 	lbSecGroupName := getSecurityGroupName(service)
-	lbSecGroupID, err := secgroups.IDFromName(ctx, lbaas.network, lbSecGroupName)
+	lbSecGroupID, err := secgroups.IDFromName(ctx, lbaas.network.get(service.ObjectMeta), lbSecGroupName)
 	if err != nil {
 		if cpoerrors.IsNotFound(err) {
 			// It is OK when the security group has been deleted by others.
@@ -347,12 +347,12 @@ func (lbaas *LbaasV2) ensureSecurityGroupDeleted(ctx context.Context, service *c
 	}
 
 	// Disassociate the security group from the neutron ports on the nodes.
-	if err := disassociateSecurityGroupForLB(ctx, lbaas.network, lbSecGroupID); err != nil {
+	if err := disassociateSecurityGroupForLB(ctx, lbaas.network.get(service.ObjectMeta), lbSecGroupID); err != nil {
 		return fmt.Errorf("failed to disassociate security group %s: %v", lbSecGroupID, err)
 	}
 
 	mc := metrics.NewMetricContext("security_group", "delete")
-	lbSecGroup := groups.Delete(ctx, lbaas.network, lbSecGroupID)
+	lbSecGroup := groups.Delete(ctx, lbaas.network.get(service.ObjectMeta), lbSecGroupID)
 	if lbSecGroup.Err != nil && !cpoerrors.IsNotFound(lbSecGroup.Err) {
 		return mc.ObserveRequest(lbSecGroup.Err)
 	}

@@ -24,6 +24,7 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/subnets"
 	"gopkg.in/godo.v2/glob"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/cloud-provider-openstack/pkg/util"
 )
 
@@ -127,12 +128,12 @@ func (s *floatingSubnetSpec) Configured() bool {
 	return false
 }
 
-func (s *floatingSubnetSpec) listSubnetsForNetwork(ctx context.Context, lbaas *LbaasV2, networkID string) ([]subnets.Subnet, error) {
+func (s *floatingSubnetSpec) listSubnetsForNetwork(ctx context.Context, service *corev1.Service, lbaas *LbaasV2, networkID string) ([]subnets.Subnet, error) {
 	matcher, err := s.matcher(false)
 	if err != nil {
 		return nil, err
 	}
-	list, err := lbaas.listSubnetsForNetwork(ctx, networkID, s.tweakListOpts)
+	list, err := lbaas.listSubnetsForNetwork(ctx, service, networkID, s.tweakListOpts)
 	if err != nil {
 		return nil, err
 	}

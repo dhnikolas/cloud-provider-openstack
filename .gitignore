@@ -73,6 +73,7 @@ network_closure.sh
 
 # User cluster configs
 .kubeconfig
+cloud-config.conf
 
 .tags*
 

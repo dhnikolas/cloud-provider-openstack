@@ -3,10 +3,11 @@ package openstack
 import (
 	"context"
 	"fmt"
-	"k8s.io/utils/ptr"
 	"reflect"
 	"sort"
 	"testing"
+
+	"k8s.io/utils/ptr"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/listeners"
@@ -1988,7 +1989,7 @@ func TestBuildBatchUpdateMemberOpts(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			lbaas := &LbaasV2{}
-			members, newMembers, err := lbaas.buildBatchUpdateMemberOpts(context.TODO(), tc.port, tc.nodes, tc.svcConf)
+			members, newMembers, err := lbaas.buildBatchUpdateMemberOpts(context.TODO(), &corev1.Service{}, tc.port, tc.nodes, tc.svcConf)
 			assert.Len(t, members, tc.expectedLen)
 			assert.NoError(t, err)
 
@@ -2240,7 +2241,7 @@ func Test_buildMonitorCreateOpts(t *testing.T) {
 						opts: LoadBalancerOpts{
 							LBProvider: "ovn",
 						},
-						lb: &gophercloud.ServiceClient{},
+						lb: newClientsFactory(loadbalancerClientType, &gophercloud.ServiceClient{}),
 					},
 				},
 				svcConf: &serviceConfig{
@@ -2331,7 +2332,7 @@ func Test_buildMonitorCreateOpts(t *testing.T) {
 						opts: LoadBalancerOpts{
 							LBProvider: "amphora",
 						},
-						lb: &gophercloud.ServiceClient{},
+						lb: newClientsFactory(loadbalancerClientType, &gophercloud.ServiceClient{}),
 					},
 				},
 				svcConf: &serviceConfig{
@@ -2362,7 +2363,7 @@ func Test_buildMonitorCreateOpts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.testArg.lbaas.buildMonitorCreateOpts(context.TODO(), tt.testArg.svcConf, tt.testArg.port, tt.name)
+			result := tt.testArg.lbaas.buildMonitorCreateOpts(context.TODO(), &corev1.Service{}, tt.testArg.svcConf, tt.testArg.port, tt.name)
 			assert.Equal(t, tt.want, result)
 		})
 	}
@@ -2494,13 +2495,10 @@ func TestBuildListenerCreateOpt(t *testing.T) {
 					opts: LoadBalancerOpts{
 						LBProvider: "not-ovn",
 					},
-					lb: &gophercloud.ServiceClient{
-						ProviderClient: &gophercloud.ProviderClient{},
-						Endpoint:       "",
-					},
+					lb: newClientsFactory(loadbalancerClientType, &gophercloud.ServiceClient{}),
 				},
 			}
-			createOpt := lbaas.buildListenerCreateOpt(context.TODO(), tc.port, tc.svcConf, tc.name)
+			createOpt := lbaas.buildListenerCreateOpt(context.TODO(), &corev1.Service{}, tc.port, tc.svcConf, tc.name)
 			assert.Equal(t, tc.expectedCreateOpt, createOpt)
 
 		})

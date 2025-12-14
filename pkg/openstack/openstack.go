@@ -82,9 +82,9 @@ type PortWithPortSecurity struct {
 
 // LoadBalancer is used for creating and maintaining load balancers
 type LoadBalancer struct {
-	secret        *gophercloud.ServiceClient
-	network       *gophercloud.ServiceClient
-	lb            *gophercloud.ServiceClient
+	secret        *clientsFactory
+	network       *clientsFactory
+	lb            *clientsFactory
 	opts          LoadBalancerOpts
 	kclient       kubernetes.Interface
 	eventRecorder record.EventRecorder
@@ -362,6 +362,10 @@ func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 		klog.Warningf("Failed to create an OpenStack Secret client: %v", err)
 	}
 
+	networkFactory := newClientsFactory(networkClientType, network)
+	lbFactory := newClientsFactory(loadbalancerClientType, lb)
+	secretFactory := newClientsFactory(loadbalancerClientType, secret)
+
 	// LBaaS v1 is deprecated in the OpenStack Liberty release.
 	// Currently kubernetes OpenStack cloud provider just support LBaaS v2.
 	lbVersion := os.lbOpts.LBVersion
@@ -372,7 +376,7 @@ func (os *OpenStack) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 
 	klog.V(1).Info("Claiming to support LoadBalancer")
 
-	return &LbaasV2{LoadBalancer{secret, network, lb, os.lbOpts, os.kclient, os.eventRecorder}}, true
+	return &LbaasV2{LoadBalancer{secretFactory, networkFactory, lbFactory, os.lbOpts, os.kclient, os.eventRecorder}}, true
 }
 
 // Zones indicates that we support zones
@@ -403,7 +407,9 @@ func (os *OpenStack) Routes() (cloudprovider.Routes, bool) {
 		return nil, false
 	}
 
-	r, err := NewRoutes(os, network, netExts["extraroute-atomic"], netExts["allowed-address-pairs"])
+	networkFactory := newClientsFactory(networkClientType, network)
+
+	r, err := NewRoutes(os, networkFactory, netExts["extraroute-atomic"], netExts["allowed-address-pairs"])
 	if err != nil {
 		klog.Warningf("Error initialising Routes support: %v", err)
 		return nil, false
